@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#315efb">
+<link rel="manifest" href="manifest.webmanifest">
+<title>VokabelTrainer</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f6fa;color:#182033;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:900px;margin:auto;padding:18px}.card{background:#fff;border-radius:20px;padding:20px;margin:14px 0;box-shadow:0 5px 22px #0001}
+h1{margin:0 0 6px}h2{margin:4px 0 12px}.muted{color:#687386}.drop{display:block;border:2px dashed #b9c3d4;border-radius:16px;padding:30px;text-align:center;cursor:pointer}
+input[type=file]{display:none}.btn{border:0;border-radius:13px;padding:13px 17px;background:#315efb;color:#fff;font-size:16px;font-weight:700;cursor:pointer}.btn:disabled{opacity:.55}.secondary{background:#e8ecf4;color:#182033}
+.row{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}.status{min-height:25px;margin-top:12px}.progress{height:8px;background:#e5e8ef;border-radius:8px;margin-top:12px}.bar{height:100%;width:0;background:#315efb;border-radius:8px}
+#thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:9px;margin-top:14px}.thumb{position:relative}.thumb img{width:100%;height:105px;object-fit:cover;border-radius:11px}.thumb button{position:absolute;right:3px;top:3px;border:0;border-radius:50%;width:27px;height:27px;background:white;font-size:18px}
+.hidden{display:none}table{width:100%;border-collapse:collapse;margin-top:14px}th,td{padding:7px;border-bottom:1px solid #e5e8ef;text-align:left}td input{width:100%;box-sizing:border-box;padding:9px;border:1px solid #ccd3df;border-radius:9px;font-size:16px}
+.quiz{text-align:center}.word{font-size:42px;font-weight:800;margin:28px 0}.answer{width:min(560px,100%);padding:14px;font-size:20px;border:2px solid #cbd3df;border-radius:13px}.feedback{font-size:19px;min-height:30px;margin:15px}.good{color:#16823c}.bad{color:#b42318}
+.note{background:#f7f8fb;border-radius:12px;padding:12px;margin-top:12px;font-size:14px}
+</style>
+</head>
+<body>
+<main>
+<section class="card"><h1>📚 VokabelTrainer</h1><div class="muted">Mehrere Fotos → Deutsch → Englisch</div></section>
+
+<section class="card" id="upload">
+<h2>1. Vokabelseiten auswählen</h2>
+<label class="drop" for="picker"><b>📷 Bilder auswählen</b><br><span class="muted">Mehrere Screenshots/Fotos möglich</span>
+<input id="picker" type="file" accept="image/*" multiple></label>
+<div id="thumbs"></div>
+<div class="row">
+<button class="btn" id="read">🔎 Auslesen starten</button>
+<button class="btn secondary" id="manual">✏️ Manuell eingeben</button>
+</div>
+<div class="progress"><div class="bar" id="bar"></div></div><div id="status" class="status"></div>
+<div class="note">Das Buchformat wird erwartet: <b>Englisch links, Deutsch rechts</b>. Die Abfrage ist automatisch <b>Deutsch → Englisch</b>.</div>
+</section>
+
+<section class="card hidden" id="edit">
+<h2>2. Vokabeln prüfen</h2><div class="muted">OCR kann Fehler machen – hier kannst du alles korrigieren.</div>
+<table><thead><tr><th>Deutsch</th><th>Englisch</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+<div class="row"><button class="btn secondary" id="add">+ Vokabel</button><button class="btn" id="start">▶️ Abfrage starten</button></div>
+</section>
+
+<section class="card quiz hidden" id="quiz">
+<div id="count"></div><div id="score"></div><div class="word" id="question"></div>
+<input id="answer" class="answer" placeholder="Englisch eingeben" autocapitalize="none" autocomplete="off">
+<div class="row" style="justify-content:center"><button class="btn" id="check">Prüfen</button><button class="btn secondary" id="show">Lösung</button></div>
+<div id="feedback" class="feedback"></div><button class="btn secondary" id="again">🔄 Neue Runde</button>
+</section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+let files=[],vocab=[],order=[],i=0,points=0,locked=false;
+const $=x=>document.getElementById(x);
+
+$("picker").onchange=e=>{files=[...e.target.files];renderThumbs()};
+function renderThumbs(){
+ $("thumbs").innerHTML="";
+ files.forEach((f,n)=>{let d=document.createElement("div");d.className="thumb";let img=document.createElement("img");img.src=URL.createObjectURL(f);let b=document.createElement("button");b.textContent="×";b.onclick=()=>{files.splice(n,1);renderThumbs()};d.append(img,b);$("thumbs").append(d)});
+ $("status").textContent=files.length?files.length+" Bild(er) ausgewählt.":"";
+}
+$("manual").onclick=()=>{vocab=[["",""]];renderRows();$("edit").classList.remove("hidden")};
+
+$("read").onclick=async()=>{
+ if(!files.length){$("status").textContent="Bitte zuerst Bilder auswählen.";return}
+ if(!window.Tesseract){$("status").textContent="OCR konnte nicht geladen werden. Prüfe deine Internetverbindung.";return}
+ $("read").disabled=true;vocab=[];$("bar").style.width="0%";
+ try{
+  const worker=await Tesseract.createWorker("eng+deu",1,{
+   logger:m=>{if(m.status==="recognizing text")$("bar").style.width=Math.round(((i+m.progress)/files.length)*100)+"%"},
+   workerPath:"https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js",
+   corePath:"https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core.wasm.js",
+   langPath:"https://tessdata.projectnaptha.com/4.0.0"
+  });
+  for(let n=0;n<files.length;n++){ $("status").textContent="Bild "+(n+1)+" von "+files.length+" wird ausgelesen…";let r=await worker.recognize(files[n]);vocab.push(...tablePairs(r.data)) }
+  await worker.terminate();vocab=unique(vocab);
+  if(!vocab.length)vocab=[["",""]];
+  $("status").textContent=vocab[0][0]?"Fertig: "+vocab.length+" Vokabeln erkannt.":"Keine sicheren Paare erkannt – bitte unten eingeben.";
+  renderRows();$("edit").classList.remove("hidden");
+ }catch(e){console.error(e);$("status").textContent="OCR-Fehler. Prüfe die Internetverbindung und lade die Seite neu.";vocab=[["",""]];renderRows();$("edit").classList.remove("hidden")}
+ finally{$("read").disabled=false}
+};
+
+function tablePairs(data){
+ const words=(data.words||[]).filter(w=>w.text&&w.conf>25).map(w=>({text:w.text.trim(),x:w.bbox.x0,y:w.bbox.y0,x1:w.bbox.x1,y1:w.bbox.y1,cx:(w.bbox.x0+w.bbox.x1)/2,cy:(w.bbox.y0+w.bbox.y1)/2}));
+ if(!words.length)return [];
+ const rows=[];words.sort((a,b)=>a.cy-b.cy);
+ for(const w of words){let r=rows.find(r=>Math.abs(r.cy-w.cy)<Math.max(12,(w.y1-w.y0)*.65));if(!r){r={cy:w.cy,items:[]};rows.push(r)}r.items.push(w);r.cy=(r.cy*(r.items.length-1)+w.cy)/r.items.length}
+ const out=[];
+ for(const r of rows){r.items.sort((a,b)=>a.x-b.x);if(r.items.length<2)continue;let min=r.items[0].x,max=r.items[r.items.length-1].x,split=min+(max-min)*.53,left=r.items.filter(w=>w.cx<split),right=r.items.filter(w=>w.cx>=split);if(left.length&&right.length){let eng=left.map(w=>w.text).join(" "),deu=right.map(w=>w.text).join(" ");if(eng.length<100&&deu.length<100)out.push([deu,eng])}}
+ return out;
+}
+function unique(a){let s=new Set();return a.filter(p=>{let k=(p[0]+"|"+p[1]).toLowerCase();if(!p[0]||!p[1]||s.has(k))return false;s.add(k);return true}).slice(0,200)}
+function sync(){document.querySelectorAll("#rows input").forEach(x=>vocab[+x.dataset.i][+x.dataset.c]=x.value.trim());vocab=vocab.filter(x=>x[0]&&x[1])}
+function renderRows(){$("rows").innerHTML="";vocab.forEach((p,n)=>{let tr=document.createElement("tr");tr.innerHTML='<td><input data-i="'+n+'" data-c="0"></td><td><input data-i="'+n+'" data-c="1"></td><td><button class="btn secondary" onclick="del('+n+')">×</button></td>';tr.querySelector('[data-c="0"]').value=p[0];tr.querySelector('[data-c="1"]').value=p[1];$("rows").append(tr)})}
+window.del=n=>{sync();vocab.splice(n,1);renderRows()};$("add").onclick=()=>{sync();vocab.push(["",""]);renderRows()};
+$("start").onclick=()=>{sync();if(!vocab.length)return;order=[...vocab.keys()].sort(()=>Math.random()-.5);i=0;points=0;$("upload").classList.add("hidden");$("edit").classList.add("hidden");$("quiz").classList.remove("hidden");next()};
+function norm(s){return s.toLowerCase().trim().replace(/[.,!?;:]/g,"").replace(/\s+/g," ")}
+function next(){if(i>=order.length){$("count").textContent="Fertig";$("score").textContent=points+" / "+order.length+" richtig";$("question").textContent="🎉 Runde beendet";$("answer").classList.add("hidden");$("check").classList.add("hidden");$("show").classList.add("hidden");return}locked=false;$("count").textContent="Vokabel "+(i+1)+" / "+order.length;$("score").textContent="Richtig: "+points;$("question").textContent=vocab[order[i]][0];$("answer").value="";$("answer").disabled=false;$("check").disabled=false;$("feedback").textContent="";setTimeout(()=>$("answer").focus(),50)}
+function accepted(s){return s.split(/\s*(?:\/|,)\s*/).map(norm).filter(Boolean)}
+function check(){if(locked)return;locked=true;let p=vocab[order[i]],a=norm($("answer").value);if(accepted(p[1]).includes(a)){points++;$("feedback").textContent="✅ Richtig!";$("feedback").className="feedback good"}else{$("feedback").textContent="❌ Richtig wäre: "+p[1];$("feedback").className="feedback bad"}$("answer").disabled=true;$("check").disabled=true;setTimeout(()=>{i++;next()},1100)}
+$("check").onclick=check;$("answer").onkeydown=e=>{if(e.key==="Enter")check()};$("show").onclick=()=>{if(locked)return;locked=true;$("feedback").textContent="➡️ "+vocab[order[i]][1];$("answer").disabled=true;$("check").disabled=true;setTimeout(()=>{i++;next()},1100)};
+$("again").onclick=()=>{location.reload()};
+</script>
+</body></html>
